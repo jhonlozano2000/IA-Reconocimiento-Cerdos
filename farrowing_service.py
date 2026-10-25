@@ -10,10 +10,17 @@ Analiza frames de video de jaulas paritorias para detectar:
 import io
 import time
 import logging
+import gc
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import numpy as np
 from PIL import Image
+
+try:
+    import torch
+    HAVE_TORCH = True
+except ImportError:
+    HAVE_TORCH = False
 
 try:
     from ultralytics import YOLO
@@ -91,10 +98,15 @@ class FarrowingAnalyzer:
         cajas_detectadas = []
         lechones_detectados = lechones_previos
 
-        # 1. Inferencia YOLO sobre el encuadre
+        # 1. Inferencia YOLO sobre el encuadre (AUD-ML-004: bajo inference_mode sin gradientes)
         if self.yolo_model is not None:
             try:
-                results = self.yolo_model.predict(image, conf=0.20, verbose=False)
+                if HAVE_TORCH:
+                    with torch.inference_mode():
+                        results = self.yolo_model.predict(image, conf=0.20, verbose=False)
+                else:
+                    results = self.yolo_model.predict(image, conf=0.20, verbose=False)
+
                 for r in results:
                     for box in r.boxes:
                         xyxy = box.xyxy[0].tolist()
@@ -107,6 +119,9 @@ class FarrowingAnalyzer:
                         })
             except Exception as ex:
                 logger.warning(f"Fallo en inferencia YOLO de Farrowing: {ex}")
+            finally:
+                if HAVE_TORCH and (int(time.time()) % 15 == 0):
+                    gc.collect()
 
         # 2. Análisis geométrico y biométrico de postura
         if cajas_detectadas:

@@ -19,6 +19,8 @@ import shutil
 import threading
 import re
 import logging
+import gc
+import torch
 from datetime import datetime
 from time import time, perf_counter
 import numpy as np
@@ -167,6 +169,21 @@ logger.info(f"Clases cargadas: {len(CLASS_NAMES)} - {CLASS_NAMES}")
 model_lock = threading.Lock()
 model = None
 
+# AUD-ML-004: Control de memory leaks en inferencia sobre CPU.
+# Limpieza de grafos temporales y recolección forzada periódica para evitar saturación de RAM.
+_inference_counter = 0
+_INFERENCE_GC_INTERVAL = 25
+
+
+def _limpiar_memoria_inferencia():
+    """
+    AUD-ML-004: Libera tensores temporales y fuerza recolección de basura cada N inferencias en CPU.
+    """
+    global _inference_counter
+    _inference_counter += 1
+    if _inference_counter % _INFERENCE_GC_INTERVAL == 0:
+        gc.collect()
+
 
 def load_model():
     """
@@ -233,12 +250,18 @@ def predict_top3(image_bytes, use_tta=True, threshold=None):
         tta_inputs = utils.preprocess_image_tta(image_bytes)
         batch_array = np.vstack([aug_array for aug_array, _label in tta_inputs])
         with model_lock:
-            batch_preds = model.predict(batch_array, verbose=0)
+            # AUD-ML-004: Invocación directa funcional model(tensor, training=False)
+            # Evita crear trazas tf.Graph por batch y elimina fugas de memoria de model.predict en bucles CPU.
+            batch_tensor = tf.convert_to_tensor(batch_array, dtype=tf.float32)
+            batch_preds = model(batch_tensor, training=False).numpy()
         predictions = np.mean(batch_preds, axis=0)
     else:
         img_array = preprocess_image(image_bytes)
         with model_lock:
-            predictions = model.predict(img_array, verbose=0)[0]
+            img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
+            predictions = model(img_tensor, training=False).numpy()[0]
+
+    _limpiar_memoria_inferencia()
 
     latency_ms = round((perf_counter() - t0) * 1000, 2)
     top_indices = np.argsort(predictions)[::-1][:3]
@@ -486,7 +509,9 @@ async def reconocer_completo(request: Request, data: ReconocerCompletoRequest):
             t_yolo_start = perf_counter()
             try:
                 yolo = load_yolo()
-                yolo_results = yolo(img, conf=0.25, verbose=False)
+                # AUD-ML-004: torch.inference_mode() deshabilita el rastreo de autograd y gradientes
+                with torch.inference_mode():
+                    yolo_results = yolo(img, conf=0.25, verbose=False)
 
                 for r in yolo_results:
                     boxes = r.boxes
@@ -662,7 +687,11 @@ async def detectar(file: UploadFile = File(...)):
         image_bytes = await file.read()
         img = Image.open(io.BytesIO(image_bytes))
 
-        results = yolo(img, conf=0.25, verbose=False)
+        # AUD-ML-004: Inferencia en modo estricto sin retención de tensores
+        with torch.inference_mode():
+            results = yolo(img, conf=0.25, verbose=False)
+
+        _limpiar_memoria_inferencia()
 
         deteccions = []
         for r in results:
