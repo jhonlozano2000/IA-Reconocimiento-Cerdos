@@ -109,6 +109,13 @@ ENV/
 env.bak/
 venv.bak/
 
+# Root-level venv artifacts (venv at project root)
+Scripts/
+Lib/
+share/
+etc/
+pyvenv.cfg
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -131,3 +138,5 @@ dmypy.json
 /dataset
 /output/yolo_detector/images
 /output/yolo_detector/labels
+.agents/
+skills-lock.json

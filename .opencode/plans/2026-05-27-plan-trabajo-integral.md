@@ -3,7 +3,7 @@
 ## Alcance
 
 Tres proyectos sincronizados:
-- **IA**: `C:\Users\jhonl\Desktop\cerdos` — FastAPI + MobileNetV2 + YOLOv8
+- **IA**: `C:\Users\jhonl\Desktop\Reconocimiento-Cerdos-IA` — FastAPI + MobileNetV2 + YOLOv8
 - **Backend**: `C:\laragon\www\Porci-Integral-backend` — Laravel 12 + Sanctum
 - **Frontend**: `C:\Users\jhonl\Desktop\Porci-Integral-Frontend` — React 19 + Tailwind v4
 
@@ -13,17 +13,17 @@ Tres proyectos sincronizados:
 
 Orden obligatorio — cada paso depende del anterior.
 
-### 0.1 Crear `.env` en cerdos/ y arreglar parser
+### 0.1 Crear `.env` en Reconocimiento-Cerdos-IA/ y arreglar parser
 
 | Proyecto | Archivos | Qué hacer |
 |----------|----------|-----------|
-| IA | `cerdos/.env` (crear), `app_fastapi.py:39-46`, `entrenar_v2.py:39-47` | Crear `.env` con `DATASET_PATH=C:\laragon\www\Porci-Integral-backend\storage\app\public\fotos_animales`. Arreglar parser manual: agregar `.strip('"').strip("'")` a los valores parseados. |
+| IA | `Reconocimiento-Cerdos-IA/.env` (crear), `app_fastapi.py:39-46`, `entrenar_v2.py:39-47` | Crear `.env` con `DATASET_PATH=C:\laragon\www\Porci-Integral-backend\storage\app\public\fotos_animales`. Arreglar parser manual: agregar `.strip('"').strip("'")` a los valores parseados. |
 
 ### 0.2 Poblar `fotos_animales/` con datos reales
 
 | Proyecto | Archivos | Qué hacer |
 |----------|----------|-----------|
-| IA / Backend | `limpiar_dataset.py` (cerdos), storage | Sync `dataset_procesado/` (14 clases, ~4k imágenes) → `fotos_animales/`. Cada imagen debe estar en `fotos_animales/{class_name}/`. Ejecutar script `limpiar_dataset.py` para validar imágenes corruptas, luego copiar árbol de directorios. |
+| IA / Backend | `limpiar_dataset.py` (Reconocimiento-Cerdos-IA), storage | Sync `dataset_procesado/` (14 clases, ~4k imágenes) → `fotos_animales/`. Cada imagen debe estar en `fotos_animales/{class_name}/`. Ejecutar script `limpiar_dataset.py` para validar imágenes corruptas, luego copiar árbol de directorios. |
 
 ### 0.3 Thread-safety en modelo + CORS fix
 

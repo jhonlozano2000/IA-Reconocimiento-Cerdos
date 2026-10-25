@@ -13,7 +13,7 @@ Biometric identification system for individual sows (cerdas). Two-stage pipeline
 - **Python**: 3.10.6 via Laragon (`C:\laragon\bin\python\python-3.10`)
 - **Venv**: project root IS the venv (Scripts/, pyvenv.cfg at root)
 - **Activate**: `.\Scripts\activate`
-- **OS**: Windows — all paths use backslashes; project path varies by user (`C:\Users\<username>\Desktop\cerdos`). Use relative paths or environment variables when possible.
+- **OS**: Windows — all paths use backslashes; project path varies by user (`C:\Users\<username>\Desktop\Reconocimiento-Cerdos-IA`). Use relative paths or environment variables when possible.
 - **Hardware**: CPU only — no GPU available. Training is slow (~20 min/epoch).
 
 ## Key Commands

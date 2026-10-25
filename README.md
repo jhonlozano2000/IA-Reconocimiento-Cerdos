@@ -36,24 +36,33 @@ uvicorn app_fastapi:app --host 0.0.0.0 --port 8000
 
 ## Endpoints
 
-### Generales
+### Generales & MLOps
 | Endpoint                  | Método | Descripción                          |
 | ------------------------- | ------ | ------------------------------------ |
 | `/`                       | GET    | Health check simple                  |
-| `/salud`                  | GET    | Estado completo (modelo, dataset, clases) |
+| `/salud`                  | GET    | Estado completo, telemetría hardware (CPU, RAM) y modelos |
 | `/clases`                 | GET    | Lista de clases disponibles          |
-| `/reconocer`              | POST   | Reconocer cerda por imagen (file)    |
-| `/reconocer_base64`       | POST   | Reconocer cerda por imagen (base64)  |
+| `/reconocer`              | POST   | Reconocer cerda por imagen (file) con latencia (ms) |
+| `/reconocer_base64`       | POST   | Reconocer cerda por imagen (base64) con latencia (ms) |
+| `/reconocer-completo`     | POST   | Pipeline 2 fases (YOLOv8 + MobileNetV2) con desglose de latencias |
 | `/detectar`               | POST   | Detectar cerdas en imagen (YOLO)     |
 | `/detector/status`        | GET    | Estado del detector YOLO             |
 | `/exportar-foto`          | POST   | Guardar foto en el dataset           |
 | `/confirmar`              | POST   | Registrar confirmación de IA         |
 | `/detectar-enfermedad`    | POST   | Evaluación de riesgo sanitario       |
 
-### Dataset
+### Dataset & Diagnóstico
 | Endpoint                  | Método | Descripción                          |
 | ------------------------- | ------ | ------------------------------------ |
-| `/dataset-estadisticas`   | GET    | Estadísticas del dataset             |
+| `/dataset-estadisticas`   | GET    | Estadísticas básicas del dataset     |
+| `/dataset/diagnostico`    | GET    | Diagnóstico de desbalance zootécnico y alertas de muestra insuficiente (<30 fotos) |
+
+### Farrowing AI Monitor (Monitoreo de Maternidad y Partos)
+| Endpoint                  | Método | Descripción                          |
+| ------------------------- | ------ | ------------------------------------ |
+| `/farrowing/camaras-config` | GET   | Lista de configuración de cámaras estándar de maternidad |
+| `/farrowing/analizar`     | POST   | Inferencia de postura, lechones, distocia y aplastamiento por imagen (multipart) |
+| `/farrowing/analizar-base64` | POST | Inferencia de maternidad por imagen en Base64 con telemetría en ms |
 
 ### Entrenamiento
 | Endpoint                  | Método | Descripción                          |
@@ -63,12 +72,30 @@ uvicorn app_fastapi:app --host 0.0.0.0 --port 8000
 | `/entrenar/{task_id}`     | GET    | Estado del entrenamiento             |
 | `/entrenar/activo`        | GET    | Entrenamiento activo (si existe)     |
 
-### Modelo
+### Modelo & Telemetría
 | Endpoint                  | Método | Descripción                          |
 | ------------------------- | ------ | ------------------------------------ |
+| `/modelos/info`           | GET    | Arquitectura, tamaño, clases y registros históricos |
 | `/modelo/recargar`        | POST   | Recargar modelo desde disco          |
 | `/modelo/versiones`       | GET    | Lista backups disponibles            |
 | `/modelo/restaurar`       | POST   | Restaurar un backup                  |
+
+## Monitoreo de Pariciones por Visión Artificial (Farrowing AI Monitor)
+
+Módulo zootécnico especializado para la detección automatizada de partos y riesgos en paritorios mediante visión por computadora:
+
+- **Detección de Posturas de la Cerda**: Clasificación de `decubito_lateral` (postura óptima de parición), `decubito_esternal` y `de_pie`.
+- **Conteo de Lechones**: Detección visual y recuento de lechones expulsados en la jaula paritoria.
+- **Detección de Parto Activo**: Disparo de evento cuando la cerda se encuentra en decúbito lateral con lechones nacidos o contracciones visibles (probabilidad $\ge 80\%$).
+- **Alerta Crítica de Distocia**: Detección de cese o retraso en la expulsión ($>55$ minutos sin avance tras inicio de trabajo de parto).
+- **Alerta de Riesgo de Aplastamiento**: Detección de cambios bruscos de postura de la madre con lechones en proximidad inmediata.
+
+```bash
+# Análisis de frame por Base64
+curl -X POST http://127.0.0.1:8000/farrowing/analizar-base64 \
+  -H "Content-Type: application/json" \
+  -d '{"camara_id": "CAM-01", "image_base64": "<base64_data>", "minutos_sin_avance": 60}'
+```
 
 ## Detección Temprana de Enfermedades
 
@@ -140,8 +167,27 @@ Configurable via `DATASET_PATH` en `.env`.
 
 - **Tiempo estimado entrenamiento**: 30-60 min en CPU
 - MobileNetV2 con pesos ImageNet
-- Data augmentation: rotación, zoom, flip, brillo
-- Class weighting automático
+- Data augmentation: rotación, zoom, flip, brillo adaptado a galpones porcinos
+- Class weighting automático con clipping seguro `[0.2, 10.0]` para evitar gradientes destructivos
+- Test-Time Augmentation (TTA) vectorizado en batch único `(4, 224, 224, 3)` para inferencia ultra-rápida en CPU
+- Telemetría en tiempo real: medición de latencia en milisegundos y monitoreo de RAM/CPU
+
+## Pruebas Automatizadas
+
+El microservicio cuenta con una suite integral de pruebas con `pytest` que valida telemetría, inferencia, balanceo y autenticación:
+
+```powershell
+python -m pytest tests/test_ai_pipeline.py -v
+```
+
+Casos de prueba cubiertos:
+1. `test_salud_telemetria_hardware`: Telemetría de CPU y memoria RAM.
+2. `test_clases_disponibles`: Catálogo de clases zootécnicas y umbral de confianza.
+3. `test_dataset_diagnostico_zootecnico`: Identificación de clases críticas (<30 fotos) y cálculo de ratio de desbalance.
+4. `test_modelos_info_tecnica`: Verificación de arquitectura y estado de YOLOv8.
+5. `test_inferencia_reconocer_base64_con_latencia`: Predicción Top-3 con TTA y latencia en ms.
+6. `test_seguridad_api_key_reconocer_completo`: Protección de endpoints sensibles con API Key.
+7. `test_pipeline_completo_dos_fases_yolo_mobilenet`: Integración YOLOv8 + MobileNetV2 con reporte de latencias parciales.
 
 ## Setup Portátil (sin Laragon)
 

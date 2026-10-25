@@ -20,7 +20,7 @@ import threading
 import re
 import logging
 from datetime import datetime
-from time import time
+from time import time, perf_counter
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Header, Depends
@@ -34,6 +34,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from ultralytics import YOLO
 import utils
+from farrowing_service import farrowing_analyzer, CAMARAS_DEFAULT
 
 
 # ── Configuración ────────────────────────────────────────────────
@@ -136,13 +137,24 @@ app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
 # ── API Key Auth ────────────────────────────────────────────────
-API_KEY = os.environ.get("API_KEY", "")
+API_KEY = os.environ.get("AI_API_KEY") or os.environ.get("API_KEY", "")
 
 async def verify_admin_key(x_api_key: str = Header(None)):
+    """
+    Valida la autenticación de peticiones entrantes contra la clave compartida del ecosistema.
+
+    @param x_api_key Cabecera HTTP X-API-Key enviada por Laravel o clientes autorizados.
+
+    @returns {bool} True si la llave es válida.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 19 de septiembre de 2026
+    """
     if not API_KEY:
-        return True  # No key configured = no auth
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="API Key inválida")
+        return True  # Modo desarrollo sin llave configurada
+    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Acceso no autorizado: API Key inválida o no proporcionada")
     return True
 
 
@@ -158,8 +170,13 @@ model = None
 
 def load_model():
     """
-    Carga el modelo MobileNetV2 desde disco.
-    Usa lazy loading: solo carga en el primer request.
+    Carga el modelo MobileNetV2 desde disco mediante carga perezosa con double-checked locking.
+
+    @returns {None}
+
+    @author Jhon Javer Lozano Arce
+
+    @date 19 de septiembre de 2026
     """
     global model
     if model is None:
@@ -174,39 +191,62 @@ def load_model():
 
 
 def preprocess_image(image_bytes):
+    """
+    Preprocesa una imagen en bytes a formato tensorial normalizado de MobileNetV2.
+
+    @param image_bytes Bytes crudos del archivo de imagen.
+
+    @returns {numpy.ndarray} Tensor normalizado con forma (1, 224, 224, 3).
+
+    @author Jhon Javer Lozano Arce
+
+    @date 19 de septiembre de 2026
+    """
     return utils.preprocess_image(image_bytes)
 
 
-def predict_top3(image_bytes, use_tta=True):
+def predict_top3(image_bytes, use_tta=True, threshold=None):
     """
-    Ejecuta inferencia con Test-Time Augmentation y retorna las 3 clases
-    con mayor probabilidad. Las predicciones por debajo de THRESHOLD
-    se marcan como "Desconocido".
+    Ejecuta inferencia biométrica MobileNetV2 y retorna el Top-3 de predicciones zootécnicas con latencia.
+
+    Aplica Test-Time Augmentation vectorizado en un solo batch sobre CPU para minimizar latencia
+    y clasifica como 'Desconocido' cualquier inferencia inferior al umbral de confianza biológica.
+
+    @param image_bytes Contenido binario de la imagen a clasificar.
+    @param use_tta Bandera para activar aumentos en tiempo de test (TTA).
+    @param threshold Umbral de confianza biológica personalizado (defecto THRESHOLD).
+
+    @returns {list} Lista con el ranking Top-3 de identificaciones biométricas con latencia en ms.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
     """
     load_model()
     if model is None:
-        raise HTTPException(status_code=500, detail="Modelo no cargado")
+        raise HTTPException(status_code=500, detail="Modelo MobileNetV2 no cargado en memoria")
+
+    t0 = perf_counter()
+    umbral_efectivo = threshold if (threshold is not None and threshold > 0) else THRESHOLD
 
     if use_tta:
         tta_inputs = utils.preprocess_image_tta(image_bytes)
-        all_preds = []
-        for aug_array, _label in tta_inputs:
-            with model_lock:
-                preds = model.predict(aug_array, verbose=0)[0]
-            all_preds.append(preds)
-        avg_preds = np.mean(all_preds, axis=0)
-        predictions = avg_preds
+        batch_array = np.vstack([aug_array for aug_array, _label in tta_inputs])
+        with model_lock:
+            batch_preds = model.predict(batch_array, verbose=0)
+        predictions = np.mean(batch_preds, axis=0)
     else:
         img_array = preprocess_image(image_bytes)
         with model_lock:
             predictions = model.predict(img_array, verbose=0)[0]
 
+    latency_ms = round((perf_counter() - t0) * 1000, 2)
     top_indices = np.argsort(predictions)[::-1][:3]
 
     results = []
     for idx in top_indices:
         confidence = float(predictions[idx])
-        is_unknown = confidence < THRESHOLD
+        is_unknown = confidence < umbral_efectivo
         class_name = CLASS_NAMES[idx] if 0 <= idx < len(CLASS_NAMES) else f"clase_{idx}"
 
         is_no_cerdo = class_name.lower() == NEGATIVE_CLASS.lower()
@@ -217,7 +257,9 @@ def predict_top3(image_bytes, use_tta=True):
             "class_name": display_name,
             "confidence": confidence,
             "confidence_pct": f"{confidence * 100:.1f}%",
-            "is_unknown": is_unknown or is_no_cerdo
+            "is_unknown": is_unknown or is_no_cerdo,
+            "latency_ms": latency_ms,
+            "tta_applied": use_tta,
         })
 
     return results
@@ -258,8 +300,17 @@ def ready():
 
 @app.get("/salud")
 def salud():
-    """Estado completo del servicio: modelo, dataset, clases."""
+    """
+    Estado completo del servicio: telemetría de hardware, modelo, dataset y clases.
+
+    @returns {dict} Métricas de salud, uso de RAM, CPU y estado del modelo biométrico.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
+    """
     load_model()
+    telemetry = utils.get_system_telemetry()
     return {
         "status": "ok",
         "modelo_cargado": model is not None,
@@ -270,15 +321,24 @@ def salud():
         "clases_disponibles": len(CLASS_NAMES),
         "clases": CLASS_NAMES,
         "threshold": THRESHOLD,
-        "version": "1.0.0",
+        "version": "2.0.0",
         "rate_limiting": "activo",
         "api_key_configured": bool(API_KEY),
+        "telemetria": telemetry,
     }
 
 
 @app.get("/clases")
 def get_clases():
-    """Lista todas las clases disponibles para clasificación."""
+    """
+    Lista todas las clases zootécnicas disponibles para clasificación biométrica.
+
+    @returns {dict} Listado de identificadores de cerdas y umbral.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
+    """
     return {
         "clases": CLASS_NAMES,
         "total": len(CLASS_NAMES),
@@ -290,8 +350,16 @@ def get_clases():
 @limiter.limit("60/minute")
 async def reconocer(request: Request, file: UploadFile = File(...)):
     """
-    Reconoce una cerda a partir de una imagen subida.
-    Acepta: image/jpeg, image/png, image/webp (máx 10MB).
+    Reconoce biométricamente una cerda a partir de un archivo de imagen subido (JPEG, PNG, WebP).
+
+    @param request Petición HTTP entrante para rate limiter.
+    @param file Archivo binario de imagen (UploadFile).
+
+    @returns {dict} Predicciones Top-3 y métrica de latencia en milisegundos.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
     """
     try:
         if file.content_type not in ["image/jpeg", "image/png", "image/webp"]:
@@ -302,13 +370,16 @@ async def reconocer(request: Request, file: UploadFile = File(...)):
         if len(image_bytes) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="Imagen muy grande (máx 10MB)")
 
+        t_start = perf_counter()
         results = predict_top3(image_bytes)
+        latencia_ms = round((perf_counter() - t_start) * 1000, 2)
 
         return {
             "success": True,
             "resultados": results,
             "top1": results[0]["class_name"] if results else None,
-            "confianza_top1": results[0]["confidence_pct"] if results else None
+            "confianza_top1": results[0]["confidence_pct"] if results else None,
+            "latencia_ms": latencia_ms
         }
 
     except HTTPException:
@@ -322,8 +393,16 @@ async def reconocer(request: Request, file: UploadFile = File(...)):
 @limiter.limit("60/minute")
 async def reconocer_base64(request: Request, data: dict):
     """
-    Reconoce una cerda a partir de una imagen en base64.
-    Útil para integración con cámaras o dispositivos IoT.
+    Reconoce biométricamente una cerda a partir de una cadena codificada en base64.
+
+    @param request Petición HTTP entrante para rate limiter.
+    @param data Diccionario con el campo 'imagen' en base64.
+
+    @returns {dict} Predicciones Top-3 y métrica de latencia en milisegundos.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
     """
     try:
         image_data = data.get("imagen", "")
@@ -342,13 +421,16 @@ async def reconocer_base64(request: Request, data: dict):
         if len(image_bytes) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="Imagen muy grande (máx 10MB)")
 
+        t_start = perf_counter()
         results = predict_top3(image_bytes)
+        latencia_ms = round((perf_counter() - t_start) * 1000, 2)
 
         return {
             "success": True,
             "resultados": results,
             "top1": results[0]["class_name"] if results else None,
-            "confianza_top1": results[0]["confidence_pct"] if results else None
+            "confianza_top1": results[0]["confidence_pct"] if results else None,
+            "latencia_ms": latencia_ms
         }
 
     except HTTPException:
@@ -361,54 +443,112 @@ async def reconocer_base64(request: Request, data: dict):
 class ReconocerCompletoRequest(BaseModel):
     imagen: str
     incluir_deteccion: bool = True
+    umbral: Optional[float] = None
 
 
-@app.post("/reconocer-completo")
+@app.post("/reconocer-completo", dependencies=[Depends(verify_admin_key)])
 @limiter.limit("60/minute")
 async def reconocer_completo(request: Request, data: ReconocerCompletoRequest):
-    """Combina YOLO detection + MobileNetV2 classification in one call."""
+    """
+    Pipeline Biométrico Dos Fases para Identificación de Ganado Porcino con telemetría de latencia:
+    1. YOLOv8 localiza y detecta la cerda en primer plano en la escena.
+    2. Recorta el ROI de la cerda para eliminar fondos y comederos que generan ruido.
+    3. MobileNetV2 clasifica la cerda recortada con TTA vectorizado en batch único.
+
+    @param request Petición HTTP para control de rate limiting.
+    @param data Objeto con imagen en base64 y opciones de detección.
+
+    @returns {dict} Resultados consolidados de YOLOv8 y MobileNetV2 con desglose de latencia y metadatos de ROI.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
+    """
     try:
+        t_total_start = perf_counter()
         image_data = data.imagen
         if "," in image_data:
             image_data = image_data.split(",")[1]
         image_bytes = base64.b64decode(image_data)
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
 
-        # MobileNetV2 classification
-        tf_results = predict_top3(image_bytes)
-        top1 = tf_results[0]["class_name"] if tf_results else "Desconocido"
+        threshold = data.umbral if (data.umbral is not None and data.umbral > 0) else THRESHOLD
 
-        result = {
-            "success": True,
-            "tensorflow_predictions": tf_results,
-            "identified_as": top1,
-            "confidence_top1": tf_results[0]["confidence_pct"] if tf_results else "0%",
-            "yolo_detections": [],
-            "total_detections": 0,
-        }
+        detections = []
+        best_crop_bytes = None
+        crop_dimensions = None
+        max_area = 0
+        yolo_latency_ms = 0.0
 
-        # YOLO detection if requested
+        # Fase 1: Detección y localización con YOLOv8
         if data.incluir_deteccion:
+            t_yolo_start = perf_counter()
             try:
                 yolo = load_yolo()
-                img = Image.open(io.BytesIO(image_bytes))
                 yolo_results = yolo(img, conf=0.25, verbose=False)
-                detections = []
+
                 for r in yolo_results:
                     boxes = r.boxes
                     for box in boxes:
-                        detections.append({
-                            "clase": yolo.model.names[int(box.cls[0])],
-                            "confianza": round(float(box.conf[0]) * 100),
-                            "bbox": box.xyxy[0].tolist()
-                        })
-                result["yolo_detections"] = detections
-                result["total_detections"] = len(detections)
-            except Exception as yolo_err:
-                logger.warning(f"YOLO detection error (non-fatal): {yolo_err}")
+                        coords = box.xyxy[0].tolist()
+                        conf = float(box.conf[0])
+                        cls_id = int(box.cls[0])
+                        label = yolo.model.names.get(cls_id, f"cls_{cls_id}")
 
-        return result
+                        x1, y1 = max(0, int(coords[0])), max(0, int(coords[1]))
+                        x2, y2 = min(w, int(coords[2])), min(h, int(coords[3]))
+                        area = (x2 - x1) * (y2 - y1)
+
+                        detections.append({
+                            "clase": label,
+                            "confianza": round(conf * 100),
+                            "bbox": [x1, y1, x2, y2]
+                        })
+
+                        # Seleccionar la cerda con mayor área en primer plano
+                        if area > max_area and (x2 - x1) > 40 and (y2 - y1) > 40:
+                            max_area = area
+                            crop_w, crop_h = (x2 - x1), (y2 - y1)
+                            crop_dimensions = [crop_w, crop_h]
+                            crop_img = img.crop((x1, y1, x2, y2))
+                            buf = io.BytesIO()
+                            crop_img.save(buf, format="JPEG")
+                            best_crop_bytes = buf.getvalue()
+
+            except Exception as yolo_err:
+                logger.warning(f"Error no fatal en detección YOLO: {yolo_err}")
+            yolo_latency_ms = round((perf_counter() - t_yolo_start) * 1000, 2)
+
+        # Fase 2: Clasificación MobileNetV2 sobre el ROI recortado
+        t_tf_start = perf_counter()
+        target_bytes = best_crop_bytes if best_crop_bytes is not None else image_bytes
+        tf_results = predict_top3(target_bytes, use_tta=True, threshold=threshold)
+        mobilenet_latency_ms = round((perf_counter() - t_tf_start) * 1000, 2)
+        total_latency_ms = round((perf_counter() - t_total_start) * 1000, 2)
+
+        top1 = tf_results[0]["class_name"] if tf_results else "Desconocido"
+
+        return {
+            "success": True,
+            "identified_as": top1,
+            "confidence_top1": tf_results[0]["confidence_pct"] if tf_results else "0%",
+            "confidence_score": tf_results[0]["confidence"] if tf_results else 0.0,
+            "tensorflow_predictions": tf_results,
+            "yolo_detections": detections,
+            "total_detections": len(detections),
+            "roi_cropped": best_crop_bytes is not None,
+            "roi_dimensions": crop_dimensions,
+            "threshold_applied": threshold,
+            "latencia_total_ms": total_latency_ms,
+            "latencia_yolo_ms": yolo_latency_ms,
+            "latencia_mobilenet_ms": mobilenet_latency_ms
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error en reconocer-completo: {e}")
+        logger.error(f"Error crítico en pipeline biométrico: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -732,6 +872,89 @@ async def dataset_estadisticas():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/dataset/diagnostico")
+async def dataset_diagnostico():
+    """
+    Diagnóstico zootécnico del dataset de imágenes de cerdas:
+    - Conteo por animal y detección de desbalance extremo.
+    - Identificación de clases críticas con < 30 imágenes (muestra insuficiente).
+    - Cálculo de ratio de desbalance (max / min) y recomendaciones de captura.
+
+    @returns {dict} Diagnóstico detallado con alertas de balanceo zootécnico y salud de dataset.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
+    """
+    try:
+        if not os.path.exists(DATASET_PATH):
+            return {
+                "success": False,
+                "error": "DATASET_PATH no existe en el sistema",
+                "dataset_path": DATASET_PATH,
+                "total_imagenes": 0,
+                "total_clases": 0
+            }
+
+        conteo_por_clase = {}
+        for d in sorted(os.listdir(DATASET_PATH)):
+            dir_path = os.path.join(DATASET_PATH, d)
+            if os.path.isdir(dir_path):
+                imgs = [f for f in os.listdir(dir_path) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+                conteo_por_clase[d] = len(imgs)
+
+        total_imagenes = sum(conteo_por_clase.values())
+        total_clases = len(conteo_por_clase)
+
+        if total_clases == 0:
+            return {
+                "success": True,
+                "total_imagenes": 0,
+                "total_clases": 0,
+                "mensaje": "Dataset vacío"
+            }
+
+        counts = list(conteo_por_clase.values())
+        min_imgs = min(counts)
+        max_imgs = max(counts)
+        ratio_desbalance = round(max_imgs / max(min_imgs, 1), 2)
+        promedio_por_clase = round(total_imagenes / total_clases, 1)
+
+        clases_criticas = [c for c, cnt in conteo_por_clase.items() if cnt < 30 and c != NEGATIVE_CLASS]
+        clases_optimas = [c for c, cnt in conteo_por_clase.items() if cnt >= 80]
+
+        recomendaciones = []
+        if clases_criticas:
+            recomendaciones.append(
+                f"Capturar urgentemente más fotografías para {len(clases_criticas)} cerdas con menos de 30 fotos: {', '.join(clases_criticas[:5])}"
+            )
+        if ratio_desbalance > 5.0:
+            recomendaciones.append(
+                f"Ratio de desbalance elevado ({ratio_desbalance}:1). Se recomienda aplicar oversampling o balanceo ponderado al entrenar."
+            )
+        if not recomendaciones:
+            recomendaciones.append("Dataset balanceado con representatividad fotográfica zootécnica adecuada.")
+
+        return {
+            "success": True,
+            "total_imagenes": total_imagenes,
+            "total_clases": total_clases,
+            "promedio_por_clase": promedio_por_clase,
+            "min_imagenes": min_imgs,
+            "max_imagenes": max_imgs,
+            "ratio_desbalance": ratio_desbalance,
+            "alerta_desbalance": ratio_desbalance > 3.0,
+            "clases_criticas": clases_criticas,
+            "total_criticas": len(clases_criticas),
+            "clases_optimas": clases_optimas,
+            "distribucion": conteo_por_clase,
+            "recomendaciones_zootecnicas": recomendaciones
+        }
+    except Exception as e:
+        logger.error(f"Error en diagnostico del dataset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/training-stats")
 async def training_stats():
     """
@@ -926,6 +1149,68 @@ async def modelo_versiones():
     }
 
 
+@app.get("/modelos/info")
+async def modelos_info():
+    """
+    Retorna información técnica y metadatos del modelo biométrico en producción.
+
+    Expone arquitectura de entrada, número de clases zootécnicas, tamaño del archivo de pesos,
+    umbral de corte y los registros históricos de entrenamiento.
+
+    @returns {dict} Metadatos completos del modelo de clasificación y detector.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
+    """
+    registry_file = BASE_DIR / "model_registry.json"
+    registry_entries = []
+    if registry_file.exists():
+        try:
+            with open(registry_file, encoding="utf-8") as rf:
+                registry_entries = json.load(rf)
+        except Exception:
+            registry_entries = []
+
+    model_stats = {}
+    if MODEL_PATH.exists():
+        stat = MODEL_PATH.stat()
+        model_stats = {
+            "archivo": MODEL_PATH.name,
+            "tamano_mb": round(stat.st_size / (1024 * 1024), 2),
+            "ultima_modificacion": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        }
+
+    yolo_path = BASE_DIR / "yolov8n.pt"
+    yolo_stats = {}
+    if yolo_path.exists():
+        ystat = yolo_path.stat()
+        yolo_stats = {
+            "archivo": yolo_path.name,
+            "tamano_mb": round(ystat.st_size / (1024 * 1024), 2),
+            "existe": True,
+        }
+    else:
+        yolo_stats = {"existe": False}
+
+    return {
+        "success": True,
+        "modelo_clasificador": {
+            "modelo_cargado": model is not None,
+            "modelo_existe": MODEL_PATH.exists(),
+            "detalles_archivo": model_stats,
+            "dimensiones_entrada": list(IMG_SIZE),
+            "total_clases": len(CLASS_NAMES),
+            "clases": CLASS_NAMES,
+            "umbral_activo": THRESHOLD,
+            "version": "2.0.0",
+        },
+        "detector_yolo": yolo_stats,
+        "historial_registro": registry_entries[-5:],
+        "total_versiones_registradas": len(registry_entries),
+    }
+
+
 class RestaurarRequest(BaseModel):
     version: str
 
@@ -975,6 +1260,99 @@ async def test_endpoint(data: dict):
         "message": "Test exitoso",
         "data": data
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# ENDPOINTS — Farrowing Monitor (Detección de Partos con IA)
+# ═══════════════════════════════════════════════════════════════
+
+class FarrowingAnalisisRequest(BaseModel):
+    camara_id: str = "cam-01"
+    tiempo_en_postura_min: int = 15
+    dias_gestacion: int = 114
+    lechones_previos: int = 0
+    image_base64: str
+
+
+@app.get("/farrowing/camaras-config")
+def farrowing_camaras_config():
+    """
+    Retorna la configuración predeterminada de cámaras para jaulas de maternidad.
+
+    @returns {dict} Lista de cámaras de farrowing y estado de conexión.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 26 de septiembre de 2026
+    """
+    return {
+        "status": "success",
+        "camaras": CAMARAS_DEFAULT,
+        "total": len(CAMARAS_DEFAULT)
+    }
+
+
+@app.post("/farrowing/analizar")
+async def farrowing_analizar_upload(
+    file: UploadFile = File(...),
+    camara_id: str = "cam-01",
+    tiempo_en_postura_min: int = 15,
+    dias_gestacion: int = 114,
+    lechones_previos: int = 0
+):
+    """
+    Analiza un frame fotográfico subido por multipart para detección de parto y posturas.
+
+    @param file Imagen binaria del frame capturado por la cámara.
+    @param camara_id Identificador de la cámara paritoria.
+    @param tiempo_en_postura_min Minutos continuos en la misma postura.
+    @param dias_gestacion Días de preñez de la cerda.
+    @param lechones_previos Conteo acumulado de lechones en la jaula.
+
+    @returns {dict} Análisis zootécnico de farrowing y alertas en tiempo real.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 26 de septiembre de 2026
+    """
+    image_bytes = await file.read()
+    resultado = farrowing_analyzer.analizar_imagen(
+        image_bytes=image_bytes,
+        camara_id=camara_id,
+        tiempo_en_postura_min=tiempo_en_postura_min,
+        dias_gestacion=dias_gestacion,
+        lechones_previos=lechones_previos
+    )
+    return {"status": "success", "data": resultado}
+
+
+@app.post("/farrowing/analizar-base64")
+def farrowing_analizar_base64(data: FarrowingAnalisisRequest):
+    """
+    Analiza un frame codificado en base64 para detección de parto y posturas.
+
+    @param data Objeto con imagen base64 y parámetros zootécnicos.
+
+    @returns {dict} Análisis zootécnico de farrowing y alertas en tiempo real.
+
+    @author Jhon Javer Lozano Arce
+
+    @date 26 de septiembre de 2026
+    """
+    try:
+        raw_b64 = re.sub(r"^data:image/.+;base64,", "", data.image_base64)
+        image_bytes = base64.b64decode(raw_b64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Base64 inválido: {str(e)}")
+
+    resultado = farrowing_analyzer.analizar_imagen(
+        image_bytes=image_bytes,
+        camara_id=data.camara_id,
+        tiempo_en_postura_min=data.tiempo_en_postura_min,
+        dias_gestacion=data.dias_gestacion,
+        lechones_previos=data.lechones_previos
+    )
+    return {"status": "success", "data": resultado}
 
 
 if __name__ == "__main__":

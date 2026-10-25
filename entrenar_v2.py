@@ -88,10 +88,19 @@ PROGRESS_FILE = "progress.json"
 
 def report_progress(task_dir, **kwargs):
     """
-    Reporta progreso del entrenamiento.
-    Escribe en el archivo progress.json del task_dir y también
-    imprime una línea PROGRESS:{json} para que training_manager.py
-    pueda capturarla desde stdout.
+    Reporta progreso del entrenamiento zootécnico a disco y stdout.
+
+    Escribe en el archivo progress.json del task_dir y emite PROGRESS:{json}
+    para sincronización en tiempo real con training_manager.py.
+
+    @param task_dir Directorio temporal de la tarea de entrenamiento.
+    @param kwargs Metadatos y métricas de progreso (época, accuracy, pérdida).
+
+    @returns {None}
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
     """
     if task_dir:
         path = Path(task_dir) / PROGRESS_FILE
@@ -111,6 +120,18 @@ def report_progress(task_dir, **kwargs):
 
 
 def main():
+    """
+    Pipeline principal de entrenamiento en 2 fases (Frozen + Fine-Tuning) para MobileNetV2.
+
+    Implementa balanceo de clases con clipping, aumento de datos adaptado a granjas porcinas,
+    Mixup y Focal Loss para identificación individual de cerdas.
+
+    @returns {None}
+
+    @author Jhon Javer Lozano Arce
+
+    @date 25 de septiembre de 2026
+    """
     parser = argparse.ArgumentParser(description="Entrenar modelo de reconocimiento")
     parser.add_argument("--task-id", default="")
     parser.add_argument("--task-dir", default="")
@@ -168,6 +189,18 @@ def main():
     # ── Focal Loss (enfocado en clases difíciles) ─────────────
     # gamma=1.5 (menos agresivo que 2.0 — mejor para fine-tune)
     def focal_loss(gamma=1.5, alpha=0.25):
+        """
+        Función de pérdida Focal Loss para enfocar el entrenamiento en muestras difíciles de cerdas.
+
+        @param gamma Factor de focalización para reducir el peso de muestras fáciles (defecto 1.5).
+        @param alpha Factor de ponderación balanceado (defecto 0.25).
+
+        @returns {callable} Función de pérdida compatible con Keras.
+
+        @author Jhon Javer Lozano Arce
+
+        @date 25 de septiembre de 2026
+        """
         def loss(y_true, y_pred):
             epsilon = tf.keras.backend.epsilon()
             y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
@@ -358,10 +391,12 @@ def main():
     if USE_CLASS_WEIGHTS:
         labels = train_generator.classes
         unique_classes = np.unique(labels)
-        weights = compute_class_weight("balanced", classes=unique_classes, y=labels)
-        class_weight_dict = dict(zip(unique_classes, weights))
+        raw_weights = compute_class_weight("balanced", classes=unique_classes, y=labels)
+        # Clipping seguro zootécnico para evitar gradientes explosivos en clases ultra-minoritarias
+        clipped_weights = np.clip(raw_weights, 0.2, 10.0)
+        class_weight_dict = dict(zip(unique_classes, clipped_weights))
 
-        logger.info("   Pesos por clase:")
+        logger.info("   Pesos por clase (con clipping [0.2, 10.0]):")
         for cls_idx, weight in sorted(class_weight_dict.items()):
             cls_name = class_names_found[cls_idx]
             count = int(np.sum(np.array(train_labels) == cls_idx))
@@ -567,7 +602,7 @@ def main():
         "num_classes": num_classes,
         "total_train_images": train_generator.samples,
         "total_val_images": val_generator.samples,
-        "model_path": str(final_model_path),
+        "model_path": "output_v2/" + MODEL_NAME,
     })
     with open(registry_path, "w") as _f:
         json.dump(registry[-20:], _f, indent=2)  # keep last 20 entries
