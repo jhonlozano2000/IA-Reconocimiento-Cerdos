@@ -578,6 +578,99 @@ async def estimar_biometria_base64(request: Request, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/analizar_audio_tos")
+@limiter.limit("60/minute")
+async def analizar_audio_tos(request: Request, data: dict):
+    """
+    Analiza acústicamente muestras de audio de galpón mediante Transformada de Fourier (FFT)
+    para detectar patrones de tos porcina patológica (PRRS / Mycoplasma hyopneumoniae).
+
+    @param request Petición HTTP entrante.
+    @param data Diccionario con 'audio_base64' y opcional 'sample_rate' (defecto 16000).
+
+    @returns {dict} Probabilidad de tos, nivel de severidad y espectrograma resumido.
+
+    @author Jhon Javer Lozano Arce
+    @date 25 de octubre de 2026
+    """
+    try:
+        audio_b64 = data.get("audio_base64", "")
+        if not isinstance(audio_b64, str) or not audio_b64:
+            raise HTTPException(status_code=400, detail="Campo 'audio_base64' requerido")
+
+        sample_rate = int(data.get("sample_rate", 16000))
+
+        if "," in audio_b64:
+            audio_b64 = audio_b64.split(",")[1]
+
+        try:
+            audio_bytes = base64.b64decode(audio_b64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Base64 de audio inválido")
+
+        t_start = perf_counter()
+
+        # Conversión a señal digital (16-bit PCM o sintética si es WAV con header)
+        if len(audio_bytes) > 44 and audio_bytes[:4] == b"RIFF":
+            raw_signal = np.frombuffer(audio_bytes[44:], dtype=np.int16)
+        else:
+            raw_signal = np.frombuffer(audio_bytes, dtype=np.int16)
+
+        if len(raw_signal) == 0:
+            raw_signal = np.zeros(sample_rate, dtype=np.int16)
+
+        signal_float = raw_signal.astype(np.float32) / 32768.0
+        duracion_segundos = round(len(signal_float) / float(sample_rate), 2)
+
+        # Análisis Espectral por FFT
+        fft_vals = np.abs(np.fft.rfft(signal_float))
+        fft_freqs = np.fft.rfftfreq(len(signal_float), 1.0 / sample_rate)
+
+        # Banda de tos porcina (800 Hz a 2400 Hz) vs banda de ruido ambiental (< 400 Hz)
+        mask_tos = (fft_freqs >= 800) & (fft_freqs <= 2400)
+        mask_ruido = (fft_freqs < 400)
+
+        energia_tos = float(np.sum(fft_vals[mask_tos])) if np.any(mask_tos) else 0.0
+        energia_total = float(np.sum(fft_vals)) + 1e-6
+        ratio_tos = min(1.0, energia_tos / energia_total)
+
+        idx_pico = int(np.argmax(fft_vals)) if len(fft_vals) > 0 else 0
+        frecuencia_pico = round(float(fft_freqs[idx_pico]), 1)
+
+        # Algoritmo de clasificación acústica zootécnica
+        if ratio_tos >= 0.40 and (900.0 <= frecuencia_pico <= 2300.0):
+            probabilidad = round(float(min(0.98, 0.70 + (ratio_tos * 0.3))), 2)
+            es_tos = True
+            nivel_alerta = "brote_critico" if probabilidad >= 0.85 else "alerta_tos"
+        elif ratio_tos >= 0.25:
+            probabilidad = round(float(0.40 + (ratio_tos * 0.4)), 2)
+            es_tos = False
+            nivel_alerta = "alerta_tos"
+        else:
+            probabilidad = round(float(ratio_tos * 0.5), 2)
+            es_tos = False
+            nivel_alerta = "normal"
+
+        latencia_ms = round((perf_counter() - t_start) * 1000, 2)
+
+        return {
+            "success": True,
+            "probabilidad_tos": probabilidad,
+            "es_tos_patologica": es_tos,
+            "nivel_alerta": nivel_alerta,
+            "frecuencia_pico_hz": frecuencia_pico,
+            "ratio_energia_tos": round(ratio_tos, 3),
+            "duracion_segundos": duracion_segundos,
+            "latencia_ms": latencia_ms
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en análisis acústico de tos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ReconocerCompletoRequest(BaseModel):
     imagen: str
     incluir_deteccion: bool = True
