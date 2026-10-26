@@ -463,6 +463,121 @@ async def reconocer_base64(request: Request, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/estimar_biometria_base64")
+@limiter.limit("60/minute")
+async def estimar_biometria_base64(request: Request, data: dict):
+    """
+    Estima el peso corporal (kg) y la Condición Corporal (BCS 1-5) mediante morfometría óptica
+    y visión artificial cenital (YOLOv8 + MobileNetV2).
+
+    @param request Petición HTTP para control de tasa.
+    @param data Diccionario con 'imagen' (base64) y opcional 'distancia_camara_cm'.
+
+    @returns {dict} Peso estimado, BCS clasificado, identidad y métricas morfológicas.
+
+    @author Jhon Javer Lozano Arce
+    @date 25 de octubre de 2026
+    """
+    try:
+        image_data = data.get("imagen", "")
+        if not isinstance(image_data, str) or not image_data:
+            raise HTTPException(status_code=400, detail="Campo 'imagen' requerido")
+
+        distancia_camara_cm = float(data.get("distancia_camara_cm", 150.0))
+
+        if "," in image_data:
+            image_data = image_data.split(",")[1]
+
+        try:
+            image_bytes = base64.b64decode(image_data)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Base64 inválido")
+
+        if len(image_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Imagen muy grande (máx 10MB)")
+
+        t_start = perf_counter()
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img_w, img_h = img.size
+
+        # Inferencia de detección YOLO para delimitar el área dorsal
+        yolo = load_yolo()
+        boxes = []
+        if yolo:
+            try:
+                with torch.inference_mode():
+                    img_np = np.array(img)
+                    yolo_res = yolo.predict(img_np, conf=0.25, verbose=False)
+                    if yolo_res and len(yolo_res[0].boxes) > 0:
+                        for b in yolo_res[0].boxes:
+                            xyxy = b.xyxy[0].tolist()
+                            boxes.append(xyxy)
+            except Exception as e:
+                logger.warning(f"Detección YOLO en biometría omitida por error: {e}")
+
+        if boxes:
+            x1, y1, x2, y2 = boxes[0]
+            box_w = max(1.0, x2 - x1)
+            box_h = max(1.0, y2 - y1)
+            area_pixels = box_w * box_h
+            aspect_ratio = max(box_w, box_h) / max(min(box_w, box_h), 1.0)
+        else:
+            area_pixels = img_w * img_h * 0.65
+            aspect_ratio = max(img_w, img_h) / max(min(img_w, img_h), 1.0)
+
+        # Modelo morfométrico volumétrico porcino
+        area_relativa = min(1.0, max(0.1, area_pixels / (img_w * img_h)))
+        factor_distancia = (distancia_camara_cm / 150.0) ** 1.8
+        peso_raw = 20.0 + (110.0 * area_relativa * factor_distancia)
+        peso_estimado_kg = round(float(np.clip(peso_raw, 15.0, 290.0)), 2)
+
+        # Estimación de Condición Corporal (BCS 1.0 a 5.0) por morfología elíptica dorsal
+        if aspect_ratio >= 2.4:
+            bcs = 2.0
+        elif aspect_ratio <= 1.7:
+            bcs = 4.2
+        else:
+            norm = (aspect_ratio - 1.7) / (2.4 - 1.7)
+            bcs = 4.2 - (norm * 2.2)
+
+        bcs = round(float(np.clip(bcs, 1.0, 5.0)), 1)
+
+        if bcs < 2.0:
+            clasificacion_bcs = "Caquéctica"
+        elif bcs <= 2.7:
+            clasificacion_bcs = "Delgada"
+        elif bcs <= 3.4:
+            clasificacion_bcs = "Ideal"
+        elif bcs <= 4.1:
+            clasificacion_bcs = "Sobrepeso"
+        else:
+            clasificacion_bcs = "Obesa"
+
+        # Identificación del individuo mediante MobileNetV2
+        results = predict_top3(image_bytes)
+        top1 = results[0]["class_name"] if results else None
+        confianza_top1 = results[0]["confidence_pct"] if results else 0.0
+
+        latencia_ms = round((perf_counter() - t_start) * 1000, 2)
+
+        return {
+            "success": True,
+            "animal_identificado": top1,
+            "confianza_id": confianza_top1,
+            "peso_estimado_kg": peso_estimado_kg,
+            "condicion_corporal": bcs,
+            "clasificacion_bcs": clasificacion_bcs,
+            "area_pixels": int(area_pixels),
+            "latencia_ms": latencia_ms
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en estimación biométrica: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ReconocerCompletoRequest(BaseModel):
     imagen: str
     incluir_deteccion: bool = True

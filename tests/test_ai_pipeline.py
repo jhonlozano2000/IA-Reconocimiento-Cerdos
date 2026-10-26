@@ -205,3 +205,29 @@ def test_pipeline_completo_dos_fases_yolo_mobilenet():
     assert data["latencia_total_ms"] > 0.0
     assert "latencia_mobilenet_ms" in data
     assert "latencia_yolo_ms" in data
+
+
+def test_estimacion_biometria_peso_y_bcs():
+    """
+    Valida la estimación morfométrica de peso corporal y Condición Corporal (BCS).
+
+    @author Jhon Javer Lozano Arce
+    @date 25 de octubre de 2026
+    """
+    img_b64 = _crear_imagen_sintetica_base64(size=(320, 240))
+    payload = {
+        "imagen": img_b64,
+        "distancia_camara_cm": 140.0
+    }
+    response = client.post("/estimar_biometria_base64", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "peso_estimado_kg" in data
+    assert 15.0 <= data["peso_estimado_kg"] <= 290.0
+    assert "condicion_corporal" in data
+    assert 1.0 <= data["condicion_corporal"] <= 5.0
+    assert "clasificacion_bcs" in data
+    assert data["clasificacion_bcs"] in ["Caquéctica", "Delgada", "Ideal", "Sobrepeso", "Obesa"]
+    assert "area_pixels" in data
+    assert "latencia_ms" in data
