@@ -57,6 +57,12 @@ uvicorn app_fastapi:app --host 0.0.0.0 --port 8000
 | `/dataset-estadisticas`   | GET    | Estadísticas básicas del dataset     |
 | `/dataset/diagnostico`    | GET    | Diagnóstico de desbalance zootécnico y alertas de muestra insuficiente (<30 fotos) |
 
+### Acústica & Biometría Zootécnica (Octubre 2026)
+| Endpoint                  | Método | Descripción                          |
+| ------------------------- | ------ | ------------------------------------ |
+| `/analizar_audio_tos`     | POST   | Detección acústica de tos respiratoria porcina mediante FFT (800–2400 Hz) |
+| `/estimar_biometria_base64` | POST | Estimación óptica de biometría corporal y peso vivo sin balanza |
+
 ### Farrowing AI Monitor (Monitoreo de Maternidad y Partos)
 | Endpoint                  | Método | Descripción                          |
 | ------------------------- | ------ | ------------------------------------ |
@@ -79,6 +85,49 @@ uvicorn app_fastapi:app --host 0.0.0.0 --port 8000
 | `/modelo/recargar`        | POST   | Recargar modelo desde disco          |
 | `/modelo/versiones`       | GET    | Lista backups disponibles            |
 | `/modelo/restaurar`       | POST   | Restaurar un backup                  |
+
+## Monitoreo Acústico de Tos Respiratoria (PigSound — FFT)
+
+Algoritmo de procesamiento digital de señales de audio de galpón mediante Transformada Rápida de Fourier (FFT):
+
+- **Banda de Frecuencia Porcina**: 800 Hz a 2400 Hz (frecuencia de resonancia traqueobronquial porcina).
+- **Filtrado de Ruido Ambiental**: Supresión de ruidos de baja frecuencia ($<400$ Hz) generados por extractores, comederos mecánicos o pisadas.
+- **Detección Precoz**: Identifica brotes de PRRS, *Mycoplasma hyopneumoniae* o *Actinobacillus pleuropneumoniae* 4 a 5 días antes de los síntomas clínicos macroscópicos.
+
+```bash
+# Análisis de muestra de audio por Base64
+curl -X POST http://127.0.0.1:8000/analizar_audio_tos \
+  -H "Content-Type: application/json" \
+  -d '{"audio_base64": "<base64_pcm_wav>", "sample_rate": 16000}'
+```
+
+Respuesta típica:
+```json
+{
+  "success": true,
+  "probabilidad_tos": 0.88,
+  "es_tos_patologica": true,
+  "nivel_alerta": "alerta_tos",
+  "frecuencia_pico_hz": 1450.0,
+  "ratio_energia_tos": 0.462,
+  "duracion_segundos": 1.5,
+  "latencia_ms": 14.2
+}
+```
+
+## Estimación Óptica de Biometría & Peso Vivo (PigVision)
+
+Estimación de peso vivo y volumen corporal basada en regresión morfológica por visión artificial:
+
+- **Eliminación del Estrés de Arreo**: Elimina mermas de peso asociadas al traslado forzado a básculas convencionales.
+- **Relación Largo × Perímetro Torácico**: Relación alométrica entre superficie dorsal detectada y masa muscular del cerdo.
+
+```bash
+# Estimación de peso óptico por Base64
+curl -X POST http://127.0.0.1:8000/estimar_biometria_base64 \
+  -H "Content-Type: application/json" \
+  -d '{"imagen_base64": "<base64_jpg_png>"}'
+```
 
 ## Monitoreo de Pariciones por Visión Artificial (Farrowing AI Monitor)
 
