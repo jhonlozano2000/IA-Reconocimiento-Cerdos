@@ -14,7 +14,7 @@ Servicio de inteligencia artificial para identificación biométrica de cerdas u
 ## Estructura
 
 ```
-cerdos/
+Reconocimiento-Cerdos-IA/
 ├── app_fastapi.py                 # API principal (FastAPI)
 ├── entrenar_v2.py                 # Entrenamiento MobileNetV2 (2 fases)
 ├── training_manager.py            # Gestor de entrenamiento async
