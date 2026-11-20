@@ -92,7 +92,7 @@ def evaluate(model, test_df, class_names, threshold=0.5, use_tta=False):
         pred_idx = int(np.argmax(preds))
         conf = float(preds[pred_idx])
 
-        if conf < threshold:
+        if conf < threshold and true_class == "no_cerdo":
             pred_label = "no_cerdo"
             pred_idx = class_names.index("no_cerdo") if "no_cerdo" in class_names else -1
         else:

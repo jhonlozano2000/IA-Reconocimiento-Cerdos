@@ -222,7 +222,7 @@ def preprocess_image(image_bytes):
     return utils.preprocess_image(image_bytes)
 
 
-def predict_top3(image_bytes, use_tta=True, threshold=None):
+def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=False):
     """
     Ejecuta inferencia biométrica MobileNetV2 y retorna el Top-3 de predicciones zootécnicas con latencia.
 
@@ -262,6 +262,15 @@ def predict_top3(image_bytes, use_tta=True, threshold=None):
             predictions = model(img_tensor, training=False).numpy()[0]
 
     _limpiar_memoria_inferencia()
+
+    # Si se confirma presencia de cerdo (filtro negativo activo), suprimir 'no_cerdo'
+    if filter_negative and NEGATIVE_CLASS in CLASS_NAMES:
+        neg_idx = CLASS_NAMES.index(NEGATIVE_CLASS)
+        predictions = np.copy(predictions)
+        predictions[neg_idx] = 0.0
+        sum_p = np.sum(predictions)
+        if sum_p > 0:
+            predictions = predictions / sum_p
 
     latency_ms = round((perf_counter() - t0) * 1000, 2)
     top_indices = np.argsort(predictions)[::-1][:3]
@@ -756,7 +765,9 @@ async def reconocer_completo(request: Request, data: ReconocerCompletoRequest):
         # Fase 2: Clasificación MobileNetV2 sobre el ROI recortado
         t_tf_start = perf_counter()
         target_bytes = best_crop_bytes if best_crop_bytes is not None else image_bytes
-        tf_results = predict_top3(target_bytes, use_tta=True, threshold=threshold)
+        # Si YOLO detectó un cerdo o se recortó el ROI, suprimir la clase 'no_cerdo'
+        filtro_no_cerdo = (best_crop_bytes is not None) or (len(detections) > 0)
+        tf_results = predict_top3(target_bytes, use_tta=True, threshold=threshold, filter_negative=filtro_no_cerdo)
         mobilenet_latency_ms = round((perf_counter() - t_tf_start) * 1000, 2)
         total_latency_ms = round((perf_counter() - t_total_start) * 1000, 2)
 

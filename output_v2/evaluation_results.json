@@ -1,0 +1,300 @@
+{
+  "accuracy": 0.8268156424581006,
+  "per_class": {
+    "Reproductor-Seuz": {
+      "precision": 0.9,
+      "recall": 0.9,
+      "f1-score": 0.9,
+      "support": 30.0
+    },
+    "cerda_001": {
+      "precision": 0.6857142857142857,
+      "recall": 0.8,
+      "f1-score": 0.7384615384615385,
+      "support": 30.0
+    },
+    "cerda_002": {
+      "precision": 0.7692307692307693,
+      "recall": 0.6666666666666666,
+      "f1-score": 0.7142857142857143,
+      "support": 30.0
+    },
+    "cerda_003": {
+      "precision": 0.95,
+      "recall": 0.95,
+      "f1-score": 0.95,
+      "support": 20.0
+    },
+    "cerda_004": {
+      "precision": 0.7142857142857143,
+      "recall": 0.6666666666666666,
+      "f1-score": 0.6896551724137931,
+      "support": 15.0
+    },
+    "cerda_005": {
+      "precision": 0.8823529411764706,
+      "recall": 1.0,
+      "f1-score": 0.9375,
+      "support": 30.0
+    },
+    "cerda_006": {
+      "precision": 1.0,
+      "recall": 0.5,
+      "f1-score": 0.6666666666666666,
+      "support": 12.0
+    },
+    "no_cerdo": {
+      "precision": 0.8571428571428571,
+      "recall": 1.0,
+      "f1-score": 0.9230769230769231,
+      "support": 12.0
+    },
+    "macro avg": {
+      "precision": 0.8448408209437621,
+      "recall": 0.8104166666666667,
+      "f1-score": 0.8149557518630794,
+      "support": 179.0
+    },
+    "weighted avg": {
+      "precision": 0.8330667032605908,
+      "recall": 0.8268156424581006,
+      "f1-score": 0.821950660589651,
+      "support": 179.0
+    }
+  },
+  "total_errors": 31,
+  "confusion_matrix": [
+    [
+      27,
+      1,
+      0,
+      0,
+      0,
+      2,
+      0,
+      0
+    ],
+    [
+      0,
+      24,
+      4,
+      0,
+      2,
+      0,
+      0,
+      0
+    ],
+    [
+      1,
+      9,
+      20,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      19,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      1,
+      1,
+      10,
+      0,
+      0,
+      2
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      30,
+      0,
+      0
+    ],
+    [
+      2,
+      0,
+      0,
+      0,
+      2,
+      2,
+      6,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      12
+    ]
+  ],
+  "top_errors": [
+    {
+      "true": "cerda_006",
+      "pred": "cerda_005",
+      "confidence": 0.7491348385810852
+    },
+    {
+      "true": "cerda_002",
+      "pred": "Reproductor-Seuz",
+      "confidence": 0.6977460384368896
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.6568918824195862
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.5969799757003784
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.5806756615638733
+    },
+    {
+      "true": "Reproductor-Seuz",
+      "pred": "cerda_005",
+      "confidence": 0.5670818090438843
+    },
+    {
+      "true": "cerda_001",
+      "pred": "cerda_002",
+      "confidence": 0.5575245022773743
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.5368692874908447
+    },
+    {
+      "true": "cerda_001",
+      "pred": "cerda_002",
+      "confidence": 0.5184916257858276
+    },
+    {
+      "true": "cerda_001",
+      "pred": "cerda_002",
+      "confidence": 0.5083721876144409
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.46430492401123047
+    },
+    {
+      "true": "Reproductor-Seuz",
+      "pred": "cerda_001",
+      "confidence": 0.4602912366390228
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.4416159391403198
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.42595335841178894
+    },
+    {
+      "true": "cerda_004",
+      "pred": "cerda_003",
+      "confidence": 0.41420406103134155
+    },
+    {
+      "true": "cerda_003",
+      "pred": "cerda_002",
+      "confidence": 0.4049191176891327
+    },
+    {
+      "true": "cerda_006",
+      "pred": "cerda_004",
+      "confidence": 0.40305158495903015
+    },
+    {
+      "true": "cerda_006",
+      "pred": "cerda_004",
+      "confidence": 0.40305158495903015
+    },
+    {
+      "true": "cerda_001",
+      "pred": "cerda_004",
+      "confidence": 0.40179166197776794
+    },
+    {
+      "true": "cerda_001",
+      "pred": "cerda_002",
+      "confidence": 0.3842315673828125
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.35953786969184875
+    },
+    {
+      "true": "cerda_006",
+      "pred": "Reproductor-Seuz",
+      "confidence": 0.35717400908470154
+    },
+    {
+      "true": "cerda_004",
+      "pred": "no_cerdo",
+      "confidence": 0.3552405834197998
+    },
+    {
+      "true": "cerda_004",
+      "pred": "cerda_001",
+      "confidence": 0.34727466106414795
+    },
+    {
+      "true": "cerda_006",
+      "pred": "cerda_005",
+      "confidence": 0.3433215618133545
+    },
+    {
+      "true": "cerda_002",
+      "pred": "cerda_001",
+      "confidence": 0.3419962227344513
+    },
+    {
+      "true": "cerda_006",
+      "pred": "Reproductor-Seuz",
+      "confidence": 0.3215159773826599
+    },
+    {
+      "true": "cerda_004",
+      "pred": "cerda_002",
+      "confidence": 0.30779212713241577
+    },
+    {
+      "true": "cerda_001",
+      "pred": "cerda_004",
+      "confidence": 0.3037886917591095
+    },
+    {
+      "true": "cerda_004",
+      "pred": "no_cerdo",
+      "confidence": 0.2982496917247772
+    }
+  ]
+}
