@@ -143,7 +143,13 @@ Módulo zootécnico especializado para la detección automatizada de partos y ri
 # Análisis de frame por Base64
 curl -X POST http://127.0.0.1:8000/farrowing/analizar-base64 \
   -H "Content-Type: application/json" \
-  -d '{"camara_id": "CAM-01", "image_base64": "<base64_data>", "minutos_sin_avance": 60}'
+  -d '{
+    "camara_id": "cam-01",
+    "image_base64": "<base64_data>",
+    "tiempo_en_postura_min": 60,
+    "dias_gestacion": 114,
+    "lechones_previos": 2
+  }'
 ```
 
 ## Detección Temprana de Enfermedades
