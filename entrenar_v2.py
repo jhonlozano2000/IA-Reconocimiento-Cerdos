@@ -72,9 +72,9 @@ FINETUNE_LR = 0.000001
 VALIDATION_SPLIT = 0.2
 TEST_SPLIT = 0.15
 MAX_IMAGES_PER_CLASS = 200
-MAX_NO_CERDO = 80
-UNFREEZE_LAST_N = 8  # capas a descongelar en fine-tune (menos = menos overfitting)
-OVERSAMPLE_MIN = 80    # clases con menos imágenes reciben oversampling
+MAX_NO_CERDO = 60
+UNFREEZE_LAST_N = 16  # capas a descongelar en fine-tune (aprende patrones finos de pigmentación)
+OVERSAMPLE_MIN = 120    # clases con menos imágenes reciben oversampling
 USE_MIXUP = True       # Mixup augmentation (mezcla pares de imágenes)
 MIXUP_ALPHA = 0.2      # parámetro Beta para Mixup
 
@@ -143,11 +143,11 @@ def main():
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--finetune-lr", type=float, default=0.000001)
     parser.add_argument("--max-images-per-class", type=int, default=200)
-    parser.add_argument("--max-no-cerdo", type=int, default=80)
-    parser.add_argument("--unfreeze-layers", type=int, default=8)
+    parser.add_argument("--max-no-cerdo", type=int, default=60)
+    parser.add_argument("--unfreeze-layers", type=int, default=16)
     parser.add_argument("--disable-mixup", action="store_true", help="Deshabilita Mixup augmentation")
     parser.add_argument("--mixup-alpha", type=float, default=0.2)
-    parser.add_argument("--oversample-min", type=int, default=80)
+    parser.add_argument("--oversample-min", type=int, default=120)
     parser.add_argument("--focal-gamma", type=float, default=1.5)
     parser.add_argument("--disable-class-weights", action="store_true", help="Deshabilita balanceo de class weights")
     args = parser.parse_args()
@@ -352,14 +352,15 @@ def main():
 
     train_datagen = ImageDataGenerator(
         rescale=1.0 / 255,
-        rotation_range=30,
+        rotation_range=25,
         width_shift_range=0.15,
         height_shift_range=0.15,
-        shear_range=0.15,
-        zoom_range=0.3,
+        shear_range=0.10,
+        zoom_range=0.25,
         horizontal_flip=True,
-        vertical_flip=True,
-        brightness_range=[0.6, 1.4],
+        vertical_flip=False,
+        channel_shift_range=15.0,
+        brightness_range=[0.75, 1.25],
         fill_mode="nearest",
     )
 
