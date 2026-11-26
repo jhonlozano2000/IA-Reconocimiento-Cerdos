@@ -27,6 +27,7 @@ import numpy as np
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import tensorflow as tf
@@ -297,6 +298,109 @@ def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=Fals
     return results
 
 
+def clasificar_presencia_cerdo(image_bytes: bytes, use_tta: bool = True, negative_threshold: float = 0.45) -> dict:
+    """
+    Confronta una imagen contra el clasificador MobileNetV2 incluyendo la clase negativa 'no_cerdo'.
+    Determina si la escena corresponde a un cerdo real o a una imagen ajena (documentos, radiografías, objetos).
+    """
+    load_model()
+    if model is None:
+        raise HTTPException(status_code=500, detail="Modelo MobileNetV2 no cargado en memoria")
+
+    if use_tta:
+        tta_inputs = utils.preprocess_image_tta(image_bytes)
+        batch_array = np.vstack([aug_array for aug_array, _label in tta_inputs])
+        with model_lock:
+            batch_tensor = tf.convert_to_tensor(batch_array, dtype=tf.float32)
+            batch_preds = model(batch_tensor, training=False).numpy()
+        predictions = np.mean(batch_preds, axis=0)
+    else:
+        img_array = preprocess_image(image_bytes)
+        with model_lock:
+            img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
+            predictions = model(img_tensor, training=False).numpy()[0]
+
+    _limpiar_memoria_inferencia()
+
+    neg_idx = next(
+        (i for i, c in enumerate(CLASS_NAMES) if c.lower() == NEGATIVE_CLASS.lower()),
+        None,
+    )
+    prob_no_cerdo = float(predictions[neg_idx]) if (neg_idx is not None and neg_idx < len(predictions)) else 0.0
+
+    top_raw_idx = int(np.argmax(predictions))
+    top_raw_class = CLASS_NAMES[top_raw_idx] if 0 <= top_raw_idx < len(CLASS_NAMES) else f"clase_{top_raw_idx}"
+    es_no_cerdo = (top_raw_class.lower() == NEGATIVE_CLASS.lower()) or (prob_no_cerdo >= negative_threshold)
+
+    pig_indices = [i for i in range(len(predictions)) if i != neg_idx]
+    if pig_indices:
+        best_pig_idx = max(pig_indices, key=lambda i: float(predictions[i]))
+        best_pig_class = CLASS_NAMES[best_pig_idx] if best_pig_idx < len(CLASS_NAMES) else f"clase_{best_pig_idx}"
+        best_pig_conf = float(predictions[best_pig_idx])
+    else:
+        best_pig_class = None
+        best_pig_conf = 0.0
+
+    animal_identificado = best_pig_class if (not es_no_cerdo and best_pig_conf >= THRESHOLD) else None
+
+    return {
+        "es_cerdo": not es_no_cerdo,
+        "es_no_cerdo": es_no_cerdo,
+        "prob_no_cerdo": prob_no_cerdo,
+        "prob_cerdo": round(max(0.0, 1.0 - prob_no_cerdo), 4),
+        "animal_identificado": animal_identificado,
+        "confianza_id": round(best_pig_conf * 100.0, 1),
+        "top_raw_class": top_raw_class,
+    }
+
+
+def _cargar_imagen_base64_validada(image_data: str) -> tuple[bytes, Image.Image]:
+    """Decodifica imagen base64, valida tamaño máximo (10MB) y la convierte a RGB."""
+    if not isinstance(image_data, str) or not image_data:
+        raise HTTPException(status_code=400, detail="Campo 'imagen' requerido")
+
+    if "," in image_data:
+        image_data = image_data.split(",")[1]
+
+    try:
+        image_bytes = base64.b64decode(image_data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Base64 inválido")
+
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagen muy grande (máx 10MB)")
+
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    return image_bytes, img
+
+
+def _detectar_cajas_animales_yolo(img: Image.Image) -> list:
+    """Ejecuta YOLOv8 filtrando únicamente clases cuadrúpedas/porcinas plausibles."""
+    yolo = load_yolo()
+    boxes = []
+    if not yolo:
+        return boxes
+
+    try:
+        img_np = np.array(img)
+        yolo_names = getattr(yolo.model, "names", {}) or {}
+        is_custom_pig_yolo = len(yolo_names) <= 3
+        allowed_coco_animals = {"pig", "cerdo", "cow", "sheep", "horse", "dog", "bear", "cat", "elephant"}
+
+        with torch.inference_mode():
+            yolo_res = yolo.predict(img_np, conf=0.25, verbose=False)
+            if yolo_res and len(yolo_res[0].boxes) > 0:
+                for b in yolo_res[0].boxes:
+                    cls_id = int(b.cls[0])
+                    cls_label = str(yolo_names.get(cls_id, "")).lower()
+                    if is_custom_pig_yolo or cls_label in allowed_coco_animals:
+                        boxes.append(b.xyxy[0].tolist())
+    except Exception as e:
+        logger.warning(f"Detección YOLO omitida por error: {e}")
+
+    return boxes
+
+
 # ═══════════════════════════════════════════════════════════════
 # ENDPOINTS — Reconocimiento
 # ═══════════════════════════════════════════════════════════════
@@ -488,44 +592,50 @@ async def estimar_biometria_base64(request: Request, data: dict):
     @date 25 de octubre de 2026
     """
     try:
-        image_data = data.get("imagen", "")
-        if not isinstance(image_data, str) or not image_data:
-            raise HTTPException(status_code=400, detail="Campo 'imagen' requerido")
-
         distancia_camara_cm = float(data.get("distancia_camara_cm", 150.0))
-
-        if "," in image_data:
-            image_data = image_data.split(",")[1]
-
-        try:
-            image_bytes = base64.b64decode(image_data)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Base64 inválido")
-
-        if len(image_bytes) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="Imagen muy grande (máx 10MB)")
-
         t_start = perf_counter()
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image_bytes, img = _cargar_imagen_base64_validada(data.get("imagen", ""))
         img_w, img_h = img.size
 
-        # Inferencia de detección YOLO para delimitar el área dorsal
-        yolo = load_yolo()
-        boxes = []
-        if yolo:
-            try:
-                with torch.inference_mode():
-                    img_np = np.array(img)
-                    yolo_res = yolo.predict(img_np, conf=0.25, verbose=False)
-                    if yolo_res and len(yolo_res[0].boxes) > 0:
-                        for b in yolo_res[0].boxes:
-                            xyxy = b.xyxy[0].tolist()
-                            boxes.append(xyxy)
-            except Exception as e:
-                logger.warning(f"Detección YOLO en biometría omitida por error: {e}")
+        if img_w < 80 or img_h < 80:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "success": False,
+                    "error": "RESOLUCION_INSUFICIENTE",
+                    "es_cerdo": False,
+                    "message": "La resolución de la imagen es insuficiente para estimar la morfometría dorsal del cerdo.",
+                },
+            )
+
+        # Fase 1 obligatoria: Confrontación contra MobileNetV2 (clase 'no_cerdo' vs clases porcinas)
+        clasificacion = clasificar_presencia_cerdo(image_bytes)
+        if clasificacion["es_no_cerdo"]:
+            prob_pct = round(clasificacion["prob_no_cerdo"] * 100.0, 1)
+            conf_cerdo_pct = round(clasificacion["prob_cerdo"] * 100.0, 1)
+            latencia_ms = round((perf_counter() - t_start) * 1000, 2)
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "success": False,
+                    "error": "NO_ES_CERDO",
+                    "es_cerdo": False,
+                    "probabilidad_no_cerdo": prob_pct,
+                    "confianza_cerdo": conf_cerdo_pct,
+                    "message": (
+                        f"El modelo de IA clasificó la imagen como no_cerdo ({prob_pct:.1f}% de confianza). "
+                        "No se detectó un cerdo válido; sube una fotografía cenital real de un animal en corral."
+                    ),
+                    "latencia_ms": latencia_ms,
+                },
+            )
+
+        # Fase 2: Localización ROI con YOLOv8 (solo tras confirmar presencia de cerdo)
+        boxes = _detectar_cajas_animales_yolo(img)
 
         if boxes:
-            x1, y1, x2, y2 = boxes[0]
+            best_box = max(boxes, key=lambda b: max(1.0, b[2] - b[0]) * max(1.0, b[3] - b[1]))
+            x1, y1, x2, y2 = best_box
             box_w = max(1.0, x2 - x1)
             box_h = max(1.0, y2 - y1)
             area_pixels = box_w * box_h
@@ -534,7 +644,7 @@ async def estimar_biometria_base64(request: Request, data: dict):
             area_pixels = img_w * img_h * 0.65
             aspect_ratio = max(img_w, img_h) / max(min(img_w, img_h), 1.0)
 
-        # Modelo morfométrico volumétrico porcino
+        # Fase 3: Modelo morfométrico volumétrico porcino y BCS
         area_relativa = min(1.0, max(0.1, area_pixels / (img_w * img_h)))
         factor_distancia = (distancia_camara_cm / 150.0) ** 1.8
         peso_raw = 20.0 + (110.0 * area_relativa * factor_distancia)
@@ -562,28 +672,132 @@ async def estimar_biometria_base64(request: Request, data: dict):
         else:
             clasificacion_bcs = "Obesa"
 
-        # Identificación del individuo mediante MobileNetV2
-        results = predict_top3(image_bytes)
-        top1 = results[0]["class_name"] if results else None
-        confianza_top1 = results[0]["confidence_pct"] if results else 0.0
-
         latencia_ms = round((perf_counter() - t_start) * 1000, 2)
 
         return {
             "success": True,
-            "animal_identificado": top1,
-            "confianza_id": confianza_top1,
+            "es_cerdo": True,
+            "confianza_cerdo": round(clasificacion["prob_cerdo"] * 100.0, 1),
+            "probabilidad_no_cerdo": round(clasificacion["prob_no_cerdo"] * 100.0, 1),
+            "animal_identificado": clasificacion["animal_identificado"],
+            "confianza_id": clasificacion["confianza_id"],
             "peso_estimado_kg": peso_estimado_kg,
             "condicion_corporal": bcs,
             "clasificacion_bcs": clasificacion_bcs,
             "area_pixels": int(area_pixels),
-            "latencia_ms": latencia_ms
+            "latencia_ms": latencia_ms,
+            "modo": "ia_mobilenet_yolo",
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error en estimación biométrica: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analizar_celo_termico_base64")
+@limiter.limit("60/minute")
+async def analizar_celo_termico_base64(request: Request, data: dict):
+    """
+    Analiza una fotografía termográfica u óptica para HeatVision confrontando primero contra
+    MobileNetV2 (clase 'no_cerdo') y estimando hiperemia/delta térmico vulvar sobre el ROI.
+    """
+    try:
+        temp_base = float(np.clip(float(data.get("temperatura_corporal_base_c", 38.5)), 35.0, 43.0))
+        t_start = perf_counter()
+        image_bytes, img = _cargar_imagen_base64_validada(data.get("imagen", ""))
+        img_w, img_h = img.size
+
+        if img_w < 80 or img_h < 80:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "success": False,
+                    "error": "RESOLUCION_INSUFICIENTE",
+                    "es_cerdo": False,
+                    "message": "La resolución de la imagen es insuficiente para el análisis termográfico HeatVision.",
+                },
+            )
+
+        # Fase 1 obligatoria: Confrontación contra MobileNetV2 (clase 'no_cerdo' vs clases porcinas)
+        clasificacion = clasificar_presencia_cerdo(image_bytes)
+        if clasificacion["es_no_cerdo"]:
+            prob_pct = round(clasificacion["prob_no_cerdo"] * 100.0, 1)
+            conf_cerdo_pct = round(clasificacion["prob_cerdo"] * 100.0, 1)
+            latencia_ms = round((perf_counter() - t_start) * 1000, 2)
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "success": False,
+                    "error": "NO_ES_CERDO",
+                    "es_cerdo": False,
+                    "probabilidad_no_cerdo": prob_pct,
+                    "confianza_cerdo": conf_cerdo_pct,
+                    "message": (
+                        f"El modelo de IA clasificó la imagen como no_cerdo ({prob_pct:.1f}% de confianza). "
+                        "No se detectó una cerda válida; sube una fotografía termográfica u óptica real del animal."
+                    ),
+                    "latencia_ms": latencia_ms,
+                },
+            )
+
+        # Fase 2: ROI animal + firma térmica / hiperemia vulvar
+        boxes = _detectar_cajas_animales_yolo(img)
+        img_np = np.array(img, dtype=np.float32)
+
+        if boxes:
+            best_box = max(boxes, key=lambda b: max(1.0, b[2] - b[0]) * max(1.0, b[3] - b[1]))
+            x1, y1 = max(0, int(best_box[0])), max(0, int(best_box[1]))
+            x2, y2 = min(img_w, int(best_box[2])), min(img_h, int(best_box[3]))
+            roi = img_np[y1:max(y1 + 1, y2), x1:max(x1 + 1, x2)]
+        else:
+            cx1, cy1 = int(img_w * 0.2), int(img_h * 0.2)
+            cx2, cy2 = max(cx1 + 1, int(img_w * 0.8)), max(cy1 + 1, int(img_h * 0.8))
+            roi = img_np[cy1:cy2, cx1:cx2]
+
+        r, g, b = roi[:, :, 0], roi[:, :, 1], roi[:, :, 2]
+        red_excess = float(np.mean(np.maximum(0.0, r - 0.5 * (g + b)))) / 255.0
+        warm_ratio = float(np.mean((r > 170.0) & ((r - g) > 20.0) & ((r - b) > 25.0)))
+        indice_hiperemia = round(float(np.clip(red_excess * 2.2 + warm_ratio * 0.65, 0.0, 1.0)), 3)
+
+        delta_termico = round(0.2 + (indice_hiperemia * 1.6), 1)
+        temperatura_vulvar_c = round(float(np.clip(temp_base + delta_termico, 37.5, 40.8)), 1)
+        delta_termico = round(temperatura_vulvar_c - temp_base, 1)
+
+        if delta_termico >= 1.2:
+            hiperemia_edema_vulvar = "marcado_turgente"
+            estado_celo_sugerido = "celo_activo_pico_termico"
+        elif delta_termico >= 0.6:
+            hiperemia_edema_vulvar = "leve"
+            estado_celo_sugerido = "proestro_temprano"
+        else:
+            hiperemia_edema_vulvar = "ausente"
+            estado_celo_sugerido = "anestro_no_celo"
+
+        latencia_ms = round((perf_counter() - t_start) * 1000, 2)
+
+        return {
+            "success": True,
+            "es_cerdo": True,
+            "confianza_cerdo": round(clasificacion["prob_cerdo"] * 100.0, 1),
+            "probabilidad_no_cerdo": round(clasificacion["prob_no_cerdo"] * 100.0, 1),
+            "animal_identificado": clasificacion["animal_identificado"],
+            "confianza_id": clasificacion["confianza_id"],
+            "temperatura_vulvar_c": temperatura_vulvar_c,
+            "temperatura_corporal_base_c": round(temp_base, 1),
+            "delta_termico_c": delta_termico,
+            "hiperemia_edema_vulvar": hiperemia_edema_vulvar,
+            "estado_celo_sugerido": estado_celo_sugerido,
+            "indice_hiperemia": indice_hiperemia,
+            "latencia_ms": latencia_ms,
+            "modo": "ia_heatvision_mobilenet",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en análisis térmico HeatVision: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
