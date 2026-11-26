@@ -223,7 +223,7 @@ def preprocess_image(image_bytes):
     return utils.preprocess_image(image_bytes)
 
 
-def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=False):
+def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=False, auto_filter_if_pig=False):
     """
     Ejecuta inferencia biométrica MobileNetV2 y retorna el Top-3 de predicciones zootécnicas con latencia.
 
@@ -233,6 +233,8 @@ def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=Fals
     @param image_bytes Contenido binario de la imagen a clasificar.
     @param use_tta Bandera para activar aumentos en tiempo de test (TTA).
     @param threshold Umbral de confianza biológica personalizado (defecto THRESHOLD).
+    @param filter_negative Si es True, suprime siempre la clase 'no_cerdo' y renormaliza.
+    @param auto_filter_if_pig Si es True, suprime 'no_cerdo' cuando el modelo ya identifica un cerdo (prob_no_cerdo < 0.35).
 
     @returns {list} Lista con el ranking Top-3 de identificaciones biométricas con latencia en ms.
 
@@ -264,14 +266,18 @@ def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=Fals
 
     _limpiar_memoria_inferencia()
 
-    # Si se confirma presencia de cerdo (filtro negativo activo), suprimir 'no_cerdo'
-    if filter_negative and NEGATIVE_CLASS in CLASS_NAMES:
+    # Suprimir 'no_cerdo' si está forzado (ROI animal) o si MobileNetV2 ya confirma que es un cerdo
+    if NEGATIVE_CLASS in CLASS_NAMES:
         neg_idx = CLASS_NAMES.index(NEGATIVE_CLASS)
-        predictions = np.copy(predictions)
-        predictions[neg_idx] = 0.0
-        sum_p = np.sum(predictions)
-        if sum_p > 0:
-            predictions = predictions / sum_p
+        neg_prob = float(predictions[neg_idx])
+        top_raw_idx = int(np.argmax(predictions))
+        debe_filtrar = filter_negative or (auto_filter_if_pig and top_raw_idx != neg_idx and neg_prob < 0.35)
+        if debe_filtrar:
+            predictions = np.copy(predictions)
+            predictions[neg_idx] = 0.0
+            sum_p = np.sum(predictions)
+            if sum_p > 0:
+                predictions = predictions / sum_p
 
     latency_ms = round((perf_counter() - t0) * 1000, 2)
     top_indices = np.argsort(predictions)[::-1][:3]
@@ -288,6 +294,7 @@ def predict_top3(image_bytes, use_tta=True, threshold=None, filter_negative=Fals
         results.append({
             "class_id": int(idx),
             "class_name": display_name,
+            "raw_class_name": class_name,
             "confidence": confidence,
             "confidence_pct": f"{confidence * 100:.1f}%",
             "is_unknown": is_unknown or is_no_cerdo,
@@ -935,11 +942,15 @@ async def reconocer_completo(request: Request, data: ReconocerCompletoRequest):
         max_area = 0
         yolo_latency_ms = 0.0
 
-        # Fase 1: Detección y localización con YOLOv8
+        # Fase 1: Detección y localización con YOLOv8 (filtrando solo clases porcinas/cuadrúpedas)
         if data.incluir_deteccion:
             t_yolo_start = perf_counter()
             try:
                 yolo = load_yolo()
+                yolo_names = getattr(yolo.model, "names", {}) or {}
+                is_custom_pig_yolo = len(yolo_names) <= 3
+                allowed_coco_animals = {"pig", "cerdo", "cow", "sheep", "horse", "dog", "bear", "cat", "elephant"}
+
                 # AUD-ML-004: torch.inference_mode() deshabilita el rastreo de autograd y gradientes
                 with torch.inference_mode():
                     yolo_results = yolo(img, conf=0.25, verbose=False)
@@ -951,6 +962,9 @@ async def reconocer_completo(request: Request, data: ReconocerCompletoRequest):
                         conf = float(box.conf[0])
                         cls_id = int(box.cls[0])
                         label = yolo.model.names.get(cls_id, f"cls_{cls_id}")
+
+                        if not (is_custom_pig_yolo or str(label).lower() in allowed_coco_animals):
+                            continue
 
                         x1, y1 = max(0, int(coords[0])), max(0, int(coords[1]))
                         x2, y2 = min(w, int(coords[2])), min(h, int(coords[3]))
@@ -981,7 +995,13 @@ async def reconocer_completo(request: Request, data: ReconocerCompletoRequest):
         target_bytes = best_crop_bytes if best_crop_bytes is not None else image_bytes
         # Si YOLO detectó un cerdo o se recortó el ROI, suprimir la clase 'no_cerdo'
         filtro_no_cerdo = (best_crop_bytes is not None) or (len(detections) > 0)
-        tf_results = predict_top3(target_bytes, use_tta=True, threshold=threshold, filter_negative=filtro_no_cerdo)
+        tf_results = predict_top3(
+            target_bytes,
+            use_tta=True,
+            threshold=threshold,
+            filter_negative=filtro_no_cerdo,
+            auto_filter_if_pig=True,
+        )
         mobilenet_latency_ms = round((perf_counter() - t_tf_start) * 1000, 2)
         total_latency_ms = round((perf_counter() - t_total_start) * 1000, 2)
 

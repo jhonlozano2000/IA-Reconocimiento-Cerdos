@@ -202,11 +202,25 @@ def test_pipeline_completo_dos_fases_yolo_mobilenet():
     assert data["success"] is True
     assert "identified_as" in data
     assert "tensorflow_predictions" in data
+    assert "raw_class_name" in data["tensorflow_predictions"][0]
     assert "yolo_detections" in data
     assert "latencia_total_ms" in data
     assert data["latencia_total_ms"] > 0.0
     assert "latencia_mobilenet_ms" in data
     assert "latencia_yolo_ms" in data
+
+    repro_imgs = glob.glob(os.path.join(DATASET_PATH, "Reproductor-Seuz", "*.jpg"))
+    if repro_imgs:
+        with open(repro_imgs[0], "rb") as f:
+            repro_b64 = "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("utf-8")
+        repro_resp = client.post(
+            "/reconocer-completo",
+            json={"imagen": repro_b64, "incluir_deteccion": True, "umbral": 0.50},
+            headers=headers,
+        )
+        assert repro_resp.status_code == 200
+        repro_data = repro_resp.json()
+        assert repro_data["identified_as"] == "Reproductor-Seuz"
 
 
 def test_estimacion_biometria_peso_y_bcs():
